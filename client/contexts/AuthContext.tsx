@@ -19,23 +19,38 @@ import { LoginData, RegisterData, User } from "../lib/types";
 
 type Status = "idle" | "loading" | "success" | "error";
 
+interface AuthChecklistState {
+  registerSucceeded: boolean;
+  loginSucceeded: boolean;
+  tokenPresent: boolean;
+  userFetched: boolean;
+  logoutPerformed: boolean;
+}
+
 interface AuthContextValue {
   user: User | null;
   isAuthenticated: boolean;
   isInitialized: boolean;
+
   loginStatus: Status;
   registerStatus: Status;
   fetchUserStatus: Status;
   logoutStatus: Status;
+
   loginError: string | null;
   registerError: string | null;
   fetchUserError: string | null;
+
   loginMessage: string | null;
   registerMessage: string | null;
-  login: (data: LoginData) => Promise<void>;
-  register: (data: RegisterData) => Promise<void>;
+
+  checklist: AuthChecklistState;
+
+  login: (data: LoginData) => Promise<boolean>;
+  register: (data: RegisterData) => Promise<boolean>;
   logout: () => void;
-  fetchCurrentUser: () => Promise<void>;
+  fetchCurrentUser: () => Promise<boolean>;
+
   resetLoginStatus: () => void;
   resetRegisterStatus: () => void;
 }
@@ -62,25 +77,45 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [loginMessage, setLoginMessage] = useState<string | null>(null);
   const [registerMessage, setRegisterMessage] = useState<string | null>(null);
 
+  const [checklist, setChecklist] = useState<AuthChecklistState>({
+    registerSucceeded: false,
+    loginSucceeded: false,
+    tokenPresent: false,
+    userFetched: false,
+    logoutPerformed: false,
+  });
+
   const isAuthenticated = !!user;
 
-  const fetchCurrentUser = useCallback(async () => {
+  const updateTokenPresentFlag = useCallback(() => {
+    setChecklist((prev) => ({
+      ...prev,
+      tokenPresent: getStoredToken() !== null,
+    }));
+  }, []);
+
+  const fetchCurrentUser = useCallback(async (): Promise<boolean> => {
     setFetchUserStatus("loading");
     setFetchUserError(null);
     try {
       const currentUser = await apiGetCurrentUser();
       setUser(currentUser);
       setFetchUserStatus("success");
+      setChecklist((prev) => ({ ...prev, userFetched: true }));
+      return true;
     } catch (error) {
       clearStoredTokens();
       setUser(null);
       setFetchUserError(extractErrorMessage(error));
       setFetchUserStatus("error");
+      updateTokenPresentFlag();
+      return false;
     }
-  }, []);
+  }, [updateTokenPresentFlag]);
 
   useEffect(() => {
     const token = getStoredToken();
+    setChecklist((prev) => ({ ...prev, tokenPresent: token !== null }));
     if (token) {
       fetchCurrentUser().finally(() => {
         setIsInitialized(true);
@@ -90,7 +125,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
   }, [fetchCurrentUser]);
 
-  const login = useCallback(async (data: LoginData) => {
+  const login = useCallback(async (data: LoginData): Promise<boolean> => {
     setLoginStatus("loading");
     setLoginError(null);
     setLoginMessage(null);
@@ -99,14 +134,21 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setStoredTokens(tokens.access, tokens.refresh);
       setLoginStatus("success");
       setLoginMessage("登录成功，正在加载用户信息...");
+      setChecklist((prev) => ({
+        ...prev,
+        loginSucceeded: true,
+        tokenPresent: true,
+      }));
       await fetchCurrentUser();
+      return true;
     } catch (error) {
       setLoginError(extractErrorMessage(error));
       setLoginStatus("error");
+      return false;
     }
   }, [fetchCurrentUser]);
 
-  const register = useCallback(async (data: RegisterData) => {
+  const register = useCallback(async (data: RegisterData): Promise<boolean> => {
     setRegisterStatus("loading");
     setRegisterError(null);
     setRegisterMessage(null);
@@ -116,9 +158,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setRegisterMessage(
         `注册成功！用户 "${newUser.username}" 已创建，请使用注册信息登录。`
       );
+      setChecklist((prev) => ({ ...prev, registerSucceeded: true }));
+      return true;
     } catch (error) {
       setRegisterError(extractErrorMessage(error));
       setRegisterStatus("error");
+      return false;
     }
   }, []);
 
@@ -132,6 +177,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
     setRegisterError(null);
     setLoginMessage(null);
     setRegisterMessage(null);
+    setFetchUserStatus("idle");
+    setFetchUserError(null);
+    setChecklist((prev) => ({
+      ...prev,
+      tokenPresent: false,
+      userFetched: false,
+      logoutPerformed: true,
+    }));
     setLogoutStatus("success");
     setTimeout(() => setLogoutStatus("idle"), 1000);
   }, []);
@@ -161,6 +214,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     fetchUserError,
     loginMessage,
     registerMessage,
+    checklist,
     login,
     register,
     logout,
