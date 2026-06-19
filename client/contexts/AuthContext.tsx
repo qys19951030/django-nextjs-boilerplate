@@ -15,7 +15,7 @@ import {
   getStoredToken,
   extractErrorMessage,
 } from "../lib/api";
-import { LoginData, RegisterData, User } from "../lib/types";
+import { LoginData, RegisterData, TokenResponse, User } from "../lib/types";
 
 type Status = "idle" | "loading" | "success" | "error";
 
@@ -87,13 +87,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   const isAuthenticated = !!user;
 
-  const updateTokenPresentFlag = useCallback(() => {
-    setChecklist((prev) => ({
-      ...prev,
-      tokenPresent: getStoredToken() !== null,
-    }));
-  }, []);
-
   const fetchCurrentUser = useCallback(async (): Promise<boolean> => {
     setFetchUserStatus("loading");
     setFetchUserError(null);
@@ -108,10 +101,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setUser(null);
       setFetchUserError(extractErrorMessage(error));
       setFetchUserStatus("error");
-      updateTokenPresentFlag();
+      setChecklist((prev) => ({
+        ...prev,
+        tokenPresent: getStoredToken() !== null,
+        userFetched: false,
+      }));
       return false;
     }
-  }, [updateTokenPresentFlag]);
+  }, []);
 
   useEffect(() => {
     const token = getStoredToken();
@@ -129,24 +126,53 @@ export function AuthProvider({ children }: AuthProviderProps) {
     setLoginStatus("loading");
     setLoginError(null);
     setLoginMessage(null);
+
+    let tokens: TokenResponse;
     try {
-      const tokens = await apiLogin(data);
-      setStoredTokens(tokens.access, tokens.refresh);
-      setLoginStatus("success");
-      setLoginMessage("登录成功，正在加载用户信息...");
-      setChecklist((prev) => ({
-        ...prev,
-        loginSucceeded: true,
-        tokenPresent: true,
-      }));
-      await fetchCurrentUser();
-      return true;
+      tokens = await apiLogin(data);
     } catch (error) {
       setLoginError(extractErrorMessage(error));
       setLoginStatus("error");
       return false;
     }
-  }, [fetchCurrentUser]);
+
+    setStoredTokens(tokens.access, tokens.refresh);
+    setChecklist((prev) => ({ ...prev, tokenPresent: true }));
+    setLoginMessage("令牌已获取，正在拉取当前用户信息...");
+
+    let currentUser: User;
+    try {
+      currentUser = await apiGetCurrentUser();
+    } catch (error) {
+      const msg = extractErrorMessage(error);
+      clearStoredTokens();
+      setUser(null);
+      setFetchUserError(msg);
+      setFetchUserStatus("error");
+      setChecklist((prev) => ({
+        ...prev,
+        tokenPresent: false,
+        userFetched: false,
+        loginSucceeded: false,
+      }));
+      setLoginError(`已拿到令牌但获取用户信息失败，本次登录未完成：${msg}`);
+      setLoginMessage(null);
+      setLoginStatus("error");
+      return false;
+    }
+
+    setUser(currentUser);
+    setFetchUserStatus("success");
+    setFetchUserError(null);
+    setChecklist((prev) => ({
+      ...prev,
+      userFetched: true,
+      loginSucceeded: true,
+    }));
+    setLoginStatus("success");
+    setLoginMessage("登录成功");
+    return true;
+  }, []);
 
   const register = useCallback(async (data: RegisterData): Promise<boolean> => {
     setRegisterStatus("loading");
